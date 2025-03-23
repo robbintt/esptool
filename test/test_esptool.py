@@ -31,7 +31,7 @@ import tempfile
 from io import StringIO
 from socket import AF_INET, SOCK_STREAM, socket
 from time import sleep
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 from unittest.mock import patch
 
 # Link command line options --port, --chip, --baud, --with-trace, and --preload-port
@@ -1801,3 +1801,61 @@ class TestESPObjectOperations(EsptoolTestCase):
         assert "Checksum: 0x83 (valid)" in output
         assert "Wrote 0x2400 bytes to file 'output.bin'" in output
         assert esptool.__version__ in output
+
+
+class TestSafetyVerifications:
+    def setup_method(self):
+        # Mock ESPLoader object
+        self.mock_esp = Mock()
+        self.mock_esp.FLASH_SECTOR_SIZE = 4096
+        self.mock_esp.FLASH_WRITE_SIZE = 256
+        self.mock_esp.BOOTLOADER_FLASH_OFFSET = 0x1000
+        self.mock_esp.CHIP_NAME = "ESP32"
+        self.mock_esp.secure_download_mode = False
+        self.mock_esp.in_bootloader = False
+        self.mock_esp.flash_id.return_value = 0x123456
+        self.mock_esp.flash_size = 0x400000 # 4MB
+
+    def test_verify_chip_compatibility(self):
+        # Test chip compatibility verification
+        from esptool.cmds import verify_chip_compatibility
+
+        verify_chip_compatibility(self.mock_esp, "flash")
+        
+        # Test secure download mode
+        self.mock_esp.secure_download_mode = True
+        with pytest.raises(esptool.FatalError):
+            verify_chip_compatibility(self.mock_esp, "flash")
+
+    def test_verify_flash_operation(self):
+        # Test flash operation verification
+        from esptool.cmds import verify_flash_operation
+        from esptool.cmds import detect_flash_size
+
+        with patch('esptool.cmds.detect_flash_size', return_value=0x400000):
+            verify_flash_operation(self.mock_esp, 0x10000, 4096, is_write=True)
+
+        # Test misaligned address
+        with patch('esptool.cmds.detect_flash_size', return_value=0x400000):
+            with pytest.raises(esptool.FatalError):
+                verify_flash_operation(self.mock_esp, 0x10001, 4096, is_write=True)
+
+        # Test misaligned size
+        with patch('esptool.cmds.detect_flash_size', return_value=0x400000):
+            with pytest.raises(esptool.FatalError):
+                verify_flash_operation(self.mock_esp, 0x10000, 4095, is_write=True)
+
+    def test_verify_connection_stability(self):
+        # Test connection stability verification
+        from esptool.cmds import verify_connection_stability
+
+        self.mock_esp.read_reg.return_value = 1234  # Mock a successful read
+        verify_connection_stability(self.mock_esp)
+
+        # Simulate a connection error
+        self.mock_esp.read_reg.side_effect = esptool.FatalError("Connection failed")
+        with pytest.raises(esptool.FatalError):
+            verify_connection_stability(self.mock_esp)
+
+
+pytest.main()

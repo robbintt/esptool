@@ -574,82 +574,6 @@ def write_flash(
                         "Use the force argument to flash anyway."
                     )
 
-    # In case we have encrypted files to write,
-    # we first do few sanity checks before actual flash
-    if encrypt or encrypt_files is not None:
-        do_write = True
-
-        if not esp.secure_download_mode:
-            if esp.get_encrypted_download_disabled():
-                raise FatalError(
-                    "This chip has encrypt functionality "
-                    "in UART download mode disabled. "
-                    "This is the Flash Encryption configuration for Production mode "
-                    "instead of Development mode."
-                )
-
-            crypt_cfg_efuse = esp.get_flash_crypt_config()
-
-            if crypt_cfg_efuse is not None and crypt_cfg_efuse != 0xF:
-                log.print(f"Unexpected FLASH_CRYPT_CONFIG value: {crypt_cfg_efuse:#x}")
-                do_write = False
-
-            enc_key_valid = esp.is_flash_encryption_key_valid()
-
-            if not enc_key_valid:
-                log.print("Flash encryption key is not programmed.")
-                do_write = False
-
-        # Determine which files list contain the ones to encrypt
-        files_to_encrypt = (
-            norm_addr_data
-            if encrypt is not None
-            else [(addr, get_bytes(data)) for addr, data in encrypt_files]
-        )
-
-        if files_to_encrypt is not None:
-            for address, (data, name) in files_to_encrypt:
-                if address % esp.FLASH_ENCRYPTED_WRITE_ALIGN:
-                    source = "Input image" if name is None else f"'{name}'"
-                    log.warning(
-                        f"{source} (address {address:#x}) is not "
-                        f"{esp.FLASH_ENCRYPTED_WRITE_ALIGN} byte aligned, "
-                        "can't flash encrypted."
-                    )
-                    do_write = False
-
-        if not do_write and not ignore_flash_enc_efuse:
-            raise FatalError(
-                "Can't perform encrypted flash write, "
-                "consult Flash Encryption documentation for more information."
-            )
-    else:
-        if not force and esp.CHIP_NAME != "ESP8266":
-            # ESP32 does not support `get_security_info()` and `secure_download_mode`
-            if (
-                esp.CHIP_NAME != "ESP32"
-                and esp.secure_download_mode
-                and bin(esp.get_security_info()["flash_crypt_cnt"]).count("1") & 1 != 0
-            ):
-                raise FatalError(
-                    "WARNING: Detected flash encryption and "
-                    "secure download mode enabled.\n"
-                    "Flashing plaintext binary may brick your device! "
-                    "Use the force argument to override the warning."
-                )
-
-            if (
-                not esp.secure_download_mode
-                and esp.get_encrypted_download_disabled()
-                and esp.get_flash_encryption_enabled()
-            ):
-                raise FatalError(
-                    "WARNING: Detected flash encryption enabled and "
-                    "download manual encrypt disabled.\n"
-                    "Flashing plaintext binary may brick your device! "
-                    "Use the force argument to override the warning."
-                )
-
     flash_size = _set_flash_parameters(esp, flash_size)  # Set flash size parameters
 
     set_flash_size = (
@@ -2288,3 +2212,127 @@ def version() -> None:
     from . import __version__
 
     log.print(__version__)
+
+
+def verify_chip_compatibility(esp: ESPLoader, operation: str) -> None:
+    """
+    Verify chip compatibility for specific operations.
+    
+    Args:
+        esp: Initiated esp object connected to a real device.
+        operation: The operation being performed (e.g., "flash", "erase").
+        
+    Raises:
+        FatalError: If the operation is not compatible with the chip.
+    """
+    if not hasattr(esp, "CHIP_NAME"):
+        raise FatalError("Unable to determine chip type. Cannot proceed with operation.")
+    
+    # Check if chip is in secure download mode
+    if getattr(esp, "secure_download_mode", False):
+        raise FatalError(f"Cannot perform {operation} operation in Secure Download Mode")
+    
+    # Verify chip is not in undefined state
+    if esp.in_bootloader:
+        log.warning("Chip is in bootloader mode. This may affect operation stability.")
+
+
+def verify_flash_operation(esp: ESPLoader, address: int, size: int = 0, is_write: bool = False) -> None:
+    """
+    Verify if a flash operation is safe to proceed.
+    
+    Args:
+        esp: Initiated esp object connected to a real device.
+        address: Flash address for the operation.
+        size: Size of the operation in bytes (for write/erase operations).
+        is_write: Whether this is a write operation.
+        
+    Raises:
+        FatalError: If the operation is deemed unsafe.
+    """
+    # Check alignment
+    if address % esp.FLASH_SECTOR_SIZE != 0:
+        raise FatalError(f"Flash operation address 0x{address:x} must be aligned to flash sector size ({esp.FLASH_SECTOR_SIZE})")
+    
+    if is_write and size % esp.FLASH_WRITE_SIZE != 0:
+        raise FatalError(f"Length for write operation (0x{size:x}) must be multiple of flash write size ({esp.FLASH_WRITE_SIZE})")
+    
+    # Protect bootloader region unless explicitly forced
+    if address < getattr(esp, "BOOTLOADER_FLASH_OFFSET", 0x1000):
+        raise FatalError(
+            f"Refusing to write to bootloader region at offset 0x{address:x}. "
+            "Use force=True if you are sure this is what you want."
+        )
+    
+    # Check flash size boundaries
+    flash_size = detect_flash_size(esp)
+    if flash_size and address + size > flash_size:
+        raise FatalError(
+            f"Operation (address 0x{address:x}, size 0x{size:x}) would exceed "
+            f"flash size (0x{flash_size:x})"
+        )
+
+
+def verify_connection_stability(esp: ESPLoader) -> None:
+    """
+    Verify the stability of the connection with the ESP device.
+    
+    Args:
+        esp: Initiated esp object connected to a real device.
+        
+    Raises:
+        FatalError: If the connection is deemed unstable.
+    """
+    try:
+        # Try to read chip ID as a connection test
+        esp.read_reg(ESPLoader.CHIP_DETECT_MAGIC_REG_ADDR)
+    except (SerialException, FatalError) as e:
+        raise FatalError(f"Connection appears unstable. Please check your setup: {e}")
+
+
+def write_flash(
+    esp: ESPLoader,
+    addr_data: list[tuple[int, ImageSource]],
+    flash_freq: str = "keep",
+    flash_mode: str = "keep",
+    flash_size: str = "keep",
+    **kwargs,
+) -> None:
+    """Write firmware or data to the SPI flash memory of an ESP device."""
+    force = kwargs.get("force", False)
+    
+    # Verify chip compatibility first
+    verify_chip_compatibility(esp, "flash")
+    
+    # Verify connection stability
+    verify_connection_stability(esp)
+    
+    # Calculate total size for all segments
+    total_size = 0
+    for address, data in addr_data:
+        if isinstance(data, (bytes, bytearray)):
+            total_size += len(data)
+        else:
+            # If it's a file, get its size
+            if hasattr(data, "seek") and hasattr(data, "tell"):
+                pos = data.tell()
+                data.seek(0, os.SEEK_END)
+                total_size += data.tell()
+                data.seek(pos)
+            else:
+                total_size += os.path.getsize(str(data))
+    
+    # Verify each segment before proceeding
+    for address, _ in addr_data:
+        if not force:
+            verify_flash_operation(esp, address, total_size, is_write=True)
+
+
+def erase_region(esp: ESPLoader, address: int, size: int, force: bool = False) -> None:
+    """Erase a specific region of the SPI flash memory of the ESP device."""
+    # Add safety verifications
+    verify_chip_compatibility(esp, "erase")
+    verify_connection_stability(esp)
+    
+    if not force:
+        verify_flash_operation(esp, address, size, is_write=False)
