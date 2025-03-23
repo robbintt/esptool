@@ -427,54 +427,32 @@ def _update_image_flash_params(esp, address, flash_freq, flash_mode, flash_size,
     return image
 
 
-def write_flash(
-    esp: ESPLoader,
-    addr_data: list[tuple[int, ImageSource]],
-    flash_freq: str = "keep",
-    flash_mode: str = "keep",
-    flash_size: str = "keep",
-    **kwargs,
-) -> None:
-    """
-    Write firmware or data to the SPI flash memory of an ESP device.
+def write_flash(esp: ESPLoader, args):
+    """Write data to flash."""
+    # Validate flash parameters first
+    esp.set_flash_params(
+        size=args.flash_size,
+        mode=args.flash_mode,
+        freq=args.flash_freq,
+        spi_connection=args.spi_connection,
+        flash_encryption=args.flash_encryption
+    )
+    esp.validate_flash_params()
 
-    Args:
-        esp: Initiated esp object connected to a real device.
-        addr_data: List of (address, data) tuples specifying where
-            to write each file or data in flash memory. The data can be
-            a file path (str), bytes, or a file-like object.
-        flash_freq: Flash frequency to set in the bootloader image header
-            (``"keep"`` to retain current).
-        flash_mode: Flash mode to set in the bootloader image header
-            (``"keep"`` to retain current).
-        flash_size: Flash size to set in the bootloader image header
-            (``"keep"`` to retain current).
-
-    Keyword Args:
-        erase_all (bool): Erase the entire flash before writing.
-        encrypt (bool): Encrypt all files during flashing.
-        encrypt_files (list[tuple[int, ImageSource]] | None): List of
-            (address, data) tuples for files to encrypt individually.
-        compress (bool): Compress data before flashing.
-        no_compress (bool): Don't compress data before flashing.
-        force (bool): Ignore safety checks (e.g., overwriting bootloader, flash size).
-        ignore_flash_enc_efuse (bool): Ignore flash encryption eFuse settings.
-        no_progress (bool): Disable progress updates.
-    """
     # Normalize addr_data to use bytes
-    norm_addr_data = [(addr, get_bytes(data)) for addr, data in addr_data]
+    norm_addr_data = [(addr, get_bytes(data)) for addr, data in args.addr_data]
 
     # Set default values of optional arguments
-    erase_all: bool = kwargs.get("erase_all", False)
-    encrypt: bool = kwargs.get("encrypt", False)
-    encrypt_files: list[tuple[int, ImageSource]] | None = kwargs.get(
+    erase_all: bool = args.get("erase_all", False)
+    encrypt: bool = args.get("encrypt", False)
+    encrypt_files: list[tuple[int, ImageSource]] | None = args.get(
         "encrypt_files", None
     )
-    compress: bool = kwargs.get("compress", False)
-    no_compress: bool = kwargs.get("no_compress", False)
-    force: bool = kwargs.get("force", False)
-    ignore_flash_enc_efuse: bool = kwargs.get("ignore_flash_enc_efuse", False)
-    no_progress: bool = kwargs.get("no_progress", False)
+    compress: bool = args.get("compress", False)
+    no_compress: bool = args.get("no_compress", False)
+    force: bool = args.get("force", False)
+    ignore_flash_enc_efuse: bool = args.get("ignore_flash_enc_efuse", False)
+    no_progress: bool = args.get("no_progress", False)
 
     # set compress based on default behaviour:
     # -> if either "compress" or "no_compress" is set, honour that
@@ -628,7 +606,7 @@ def write_flash(
                     "Use the force argument to override the warning."
                 )
 
-    flash_size = _set_flash_parameters(esp, flash_size)  # Set flash size parameters
+    flash_size = _set_flash_parameters(esp, args.flash_size)  # Set flash size parameters
 
     set_flash_size = (
         flash_size_bytes(flash_size) if flash_size not in ["detect", "keep"] else None
@@ -657,7 +635,7 @@ def write_flash(
                 )
 
     if erase_all:
-        erase_flash(esp)
+        erase_flash(esp, args)
     else:
         for address, (data, _) in norm_addr_data:
             write_end = address + len(data)
@@ -741,7 +719,7 @@ def write_flash(
 
         if not esp.secure_download_mode and not esp.get_secure_boot_enabled():
             image = _update_image_flash_params(
-                esp, address, flash_freq, flash_mode, flash_size, image
+                esp, address, args.flash_freq, args.flash_mode, args.flash_size, image
             )
         else:
             log.warning(
@@ -1134,15 +1112,19 @@ def _set_flash_parameters(esp, flash_size="keep"):
     return "keep" if keep else flash_size
 
 
-def erase_flash(esp: ESPLoader, force: bool = False) -> None:
-    """
-    Erase the SPI flash memory of the ESP device.
+def erase_flash(esp: ESPLoader, args):
+    """Erase the entire flash."""
+    # Validate flash parameters first
+    esp.set_flash_params(
+        size=args.flash_size,
+        mode=args.flash_mode,
+        freq=args.flash_freq,
+        spi_connection=args.spi_connection,
+        flash_encryption=args.flash_encryption
+    )
+    esp.validate_flash_params()
 
-    Args:
-        esp: Initiated esp object connected to a real device.
-        force: Bypass the security checks for flash encryption and secure boot.
-    """
-    if not force and esp.CHIP_NAME != "ESP8266" and not esp.secure_download_mode:
+    if not args.force and esp.CHIP_NAME != "ESP8266" and not esp.secure_download_mode:
         if esp.get_flash_encryption_enabled() or esp.get_secure_boot_enabled():
             raise FatalError(
                 "Active security features detected, "
@@ -1329,37 +1311,27 @@ def read_flash(
         return data
 
 
-def verify_flash(
-    esp: ESPLoader,
-    addr_data: list[tuple[int, ImageSource]],
-    flash_freq: str = "keep",
-    flash_mode: str = "keep",
-    flash_size: str = "keep",
-    diff: bool = False,
-) -> None:
-    """
-    Verify the contents of the SPI flash memory against the provided binary files
-    or byte data.
+def verify_flash(esp: ESPLoader, args):
+    """Verify flash contents."""
+    # Validate flash parameters first
+    esp.set_flash_params(
+        size=args.flash_size,
+        mode=args.flash_mode,
+        freq=args.flash_freq,
+        spi_connection=args.spi_connection,
+        flash_encryption=args.flash_encryption
+    )
+    esp.validate_flash_params()
 
-    Args:
-        esp: Initiated esp object connected to a real device.
-        addr_data: List of (address, data) tuples specifying what
-            parts of flash memory to verify. The data can be
-            a file path (str), bytes, or a file-like object.
-        flash_freq: Flash frequency setting (``"keep"`` to retain current).
-        flash_mode: Flash mode setting (``"keep"`` to retain current).
-        flash_size: Flash size setting (``"keep"`` to retain current).
-        diff: If True, perform a byte-by-byte comparison on failure.
-    """
-    flash_size = _set_flash_parameters(esp, flash_size)  # Set flash size parameters
+    flash_size = _set_flash_parameters(esp, args.flash_size)  # Set flash size parameters
     mismatch = False
 
-    for address, data in addr_data:
+    for address, data in args.addr_data:
         data, source = get_bytes(data)
         image = pad_to(data, 4)
 
         image = _update_image_flash_params(
-            esp, address, flash_freq, flash_mode, flash_size, image
+            esp, address, args.flash_freq, args.flash_mode, flash_size, image
         )
 
         image_size = len(image)
@@ -1376,7 +1348,7 @@ def verify_flash(
             continue
         else:
             mismatch = True
-            if not diff:
+            if not args.diff:
                 log.print("-- verify FAILED (digest mismatch)")
                 continue
 

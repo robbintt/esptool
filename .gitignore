@@ -14,3 +14,7 @@ local.mk
 report.xml
 
 docs/_build/
+
+virtualenvs/
+.pytest_cache/
+__pycache__/

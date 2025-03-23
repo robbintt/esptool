@@ -13,6 +13,7 @@ import string
 import struct
 import sys
 import time
+from typing import Optional, Union, Tuple
 
 from .config import load_config_file
 from .logger import log
@@ -31,6 +32,7 @@ from .util import (
     UnsupportedCommandError,
 )
 from .util import byte, hexify, mask_to_shift, pad_to, strip_chip_name
+from .flash_params import FlashParameters, FlashMode, FlashFrequency, FlashSize
 
 try:
     import serial
@@ -73,8 +75,6 @@ except Exception:
         # swallow the exception, this is a known issue in pySerial+macOS Big Sur preview
         # ref https://github.com/espressif/esptool/issues/540
         list_ports = None
-    else:
-        raise
 
 
 cfg, _ = load_config_file()
@@ -217,6 +217,9 @@ class ESPLoader(object):
     DEFAULT_PORT = "/dev/ttyUSB0"
 
     USES_RFC2217 = False
+
+    # Flash parameters
+    _flash_params: Optional[FlashParameters] = None
 
     # Commands supported by ESP8266 ROM bootloader
     ESP_FLASH_BEGIN = 0x02
@@ -1671,6 +1674,30 @@ class ESPLoader(object):
             "attempting classic hard reset instead."
         )
         self.hard_reset()
+
+    def set_flash_params(self, size: str, mode: str, freq: str, spi_connection: Optional[Union[str, Tuple[int, int, int, int, int]]] = None, flash_encryption: bool = False) -> None:
+        """Set and validate flash parameters for the chip."""
+        try:
+            self._flash_params = FlashParameters(
+                size=size,
+                mode=mode,
+                freq=freq,
+                chip_name=self.CHIP_NAME,
+                spi_connection=spi_connection,
+                flash_encryption=flash_encryption
+            )
+        except ValueError as e:
+            raise FatalError(f"Invalid flash parameters: {str(e)}")
+
+    def get_flash_params(self) -> Optional[FlashParameters]:
+        """Get the current flash parameters."""
+        return self._flash_params
+
+    def validate_flash_params(self) -> None:
+        """Validate current flash parameters."""
+        if self._flash_params is None:
+            raise FatalError("Flash parameters not set. Call set_flash_params() first.")
+        # Additional validation can be added here if needed
 
 
 class StubMixin:

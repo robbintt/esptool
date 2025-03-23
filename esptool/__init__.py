@@ -248,15 +248,18 @@ def add_spi_flash_options(
                     "2MB-c1",
                     "4MB",
                     "4MB-c1",
-                    "8MB",
-                    "16MB",
-                    "32MB",
-                    "64MB",
-                    "128MB",
                 ]
             ),
-            default=os.environ.get("ESPTOOL_FS", "keep" if allow_keep else "1MB"),
+            default=os.environ.get("ESPTOOL_FS", "keep" if allow_keep else None),
         )(function)
+
+        function = click.option(
+            "--flash-encryption",
+            help="Enable flash encryption",
+            is_flag=True,
+            default=False,
+        )(function)
+
         return function
 
     return wrapper
