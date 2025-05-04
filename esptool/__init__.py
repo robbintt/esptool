@@ -102,6 +102,8 @@ from esptool.cli_util import (
     parse_size_arg,
 )
 
+from .validation import CLIValidator  # Add at top with other imports
+
 # Show arguments in the help output, this was default in argparse
 click.rich_click.SHOW_ARGUMENTS = True
 # Force alignment of commands table with groups
